@@ -316,3 +316,160 @@ struct ShoppingListTests {
         #expect(checkedNames() == ["milk"])
     }
 }
+
+// MARK: Household sharing
+
+@MainActor
+struct SharingTests {
+    let container: ModelContainer
+    let context: ModelContext
+    let store: ListStore
+    let clock: TestClock
+
+    init() throws {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        container = try ModelContainer(
+            for: ListItem.self, HistoryItem.self,
+            configurations: configuration
+        )
+        context = ModelContext(container)
+        let clock = TestClock()
+        self.clock = clock
+        store = ListStore(context: context, now: { clock.tick() })
+    }
+
+    private func stored(_ name: String) throws -> ListItem {
+        try #require(store.storedItem(named: name))
+    }
+
+    private func markAllUploaded() {
+        for item in store.allStoredItems() { item.needsUpload = false }
+        for entry in store.allHistory() { entry.needsUpload = false }
+    }
+
+    @Test func deleteIsSoftSoOtherPhonesHearAboutIt() throws {
+        store.add("milk")
+        markAllUploaded()
+        store.delete(try #require(store.item(named: "milk")))
+
+        #expect(store.allItems().isEmpty)
+        let milk = try stored("milk")
+        #expect(milk.removedAt != nil)
+        #expect(milk.needsUpload)
+    }
+
+    @Test func clearCheckedIsSoft() throws {
+        store.add("a")
+        store.add("b")
+        store.toggle(try #require(store.item(named: "a")))
+        store.clearChecked()
+
+        #expect(store.allStoredItems().count == 2)
+        #expect(try stored("a").isRemoved)
+        #expect(try stored("b").isRemoved == false)
+    }
+
+    @Test func addingDeletedNameRevivesTheSameItem() throws {
+        store.add("milk")
+        let id = try stored("milk").id
+        store.delete(try #require(store.item(named: "milk")))
+
+        #expect(store.add("Milk") == .added)
+        #expect(store.allStoredItems().count == 1)
+        let milk = try stored("milk")
+        #expect(milk.id == id)
+        #expect(milk.name == "Milk")
+        #expect(milk.isRemoved == false)
+        #expect(milk.isChecked == false)
+    }
+
+    @Test func everyChangeIsMarkedForUpload() throws {
+        store.add("eggs")
+        #expect(try stored("eggs").needsUpload)
+        #expect(try #require(store.historyItem(named: "eggs")).needsUpload)
+
+        markAllUploaded()
+        let before = try stored("eggs").modifiedAt
+        store.toggle(try stored("eggs"))
+        #expect(try stored("eggs").needsUpload)
+        #expect(try stored("eggs").modifiedAt > before)
+        #expect(try #require(store.historyItem(named: "eggs")).needsUpload == false)
+    }
+
+    @Test func activeDuplicateChangesNothing() throws {
+        store.add("milk")
+        markAllUploaded()
+        #expect(store.add("milk") == .alreadyActive)
+        #expect(try stored("milk").needsUpload == false)
+    }
+
+    @Test func renameMovesStateToNewNameAndRemovesOld() throws {
+        store.add("milk")
+        store.toggle(try stored("milk"))
+        let old = try stored("milk")
+        let checkedAt = old.checkedAt
+
+        #expect(store.rename(old, to: "oat milk") == .renamed)
+
+        #expect(store.allItems().map(\.name) == ["oat milk"])
+        let renamed = try stored("oat milk")
+        #expect(renamed.isChecked)
+        #expect(renamed.checkedAt == checkedAt)
+        #expect(try stored("milk").isRemoved)
+    }
+
+    @Test func renameReusesDeletedItemWithThatName() throws {
+        store.add("oat milk")
+        let id = try stored("oat milk").id
+        store.delete(try stored("oat milk"))
+        store.add("milk")
+
+        #expect(store.rename(try stored("milk"), to: "Oat Milk") == .renamed)
+        #expect(try stored("oat milk").id == id)
+        #expect(store.allStoredItems().count == 2)
+    }
+
+    @Test func mergeRemovesRenamedItemSoftly() throws {
+        store.add("milk")
+        store.add("bread")
+        #expect(store.rename(try stored("bread"), to: "milk") == .merged)
+        #expect(store.allItems().map(\.name) == ["milk"])
+        #expect(try stored("bread").isRemoved)
+    }
+
+    @Test func didChangeIsCalledAfterSaves() {
+        var calls = 0
+        let store = ListStore(context: context, didChange: { calls += 1 })
+        store.add("milk")
+        store.add("")
+        #expect(calls == 1)
+    }
+
+    // MARK: Sync rules
+
+    @Test func recordNameIsCaseAndSpaceInsensitive() {
+        let a = SyncRules.recordName(type: "ListItem", name: "Milk")
+        let b = SyncRules.recordName(type: "ListItem", name: "  milk ")
+        #expect(a == b)
+        #expect(a.hasPrefix("ListItem-"))
+        #expect(a != SyncRules.recordName(type: "HistoryItem", name: "milk"))
+        #expect(a != SyncRules.recordName(type: "ListItem", name: "oat milk"))
+    }
+
+    @Test func recordNameIsValidForCloudKit() {
+        let name = SyncRules.recordName(type: "ListItem", name: String(repeating: "Ünïcødé 🥛 ", count: 100))
+        #expect(name.count <= 255)
+        #expect(name.allSatisfy(\.isASCII))
+    }
+
+    @Test func remoteWinsUnlessLocalChangeIsNewer() {
+        let early = Date(timeIntervalSince1970: 100)
+        let late = Date(timeIntervalSince1970: 200)
+        // Nothing waiting to upload: iCloud is the truth.
+        #expect(SyncRules.shouldApplyRemote(localNeedsUpload: false, localModifiedAt: late, remoteModifiedAt: early))
+        // Local change waiting, remote is newer: remote wins.
+        #expect(SyncRules.shouldApplyRemote(localNeedsUpload: true, localModifiedAt: early, remoteModifiedAt: late))
+        // Local change waiting and newer: keep it and upload it.
+        #expect(SyncRules.shouldApplyRemote(localNeedsUpload: true, localModifiedAt: late, remoteModifiedAt: early) == false)
+    }
+}

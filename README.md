@@ -1,6 +1,6 @@
 # Shopping List
 
-A personal, offline iPhone shopping list built with SwiftUI and SwiftData. iOS 17.0+, iPhone only, portrait only. No dependencies, no network calls, no analytics.
+A household iPhone shopping list built with SwiftUI and SwiftData. iOS 17.0+, iPhone only, portrait only. Everyone who installs the app (through TestFlight) sees the same list, synced through the app's public iCloud database. No login, no dependencies, no analytics.
 
 ## Project layout
 
@@ -10,6 +10,7 @@ ShoppingList/
   ShoppingListApp.swift          @main app, sets up the SwiftData container
   Models.swift                   ListItem and HistoryItem (@Model)
   ListStore.swift                All business rules (ListRules + ListStore)
+  SyncEngine.swift               Household sync with the public iCloud database
   ContentView.swift              The single list screen
   Assets.xcassets                AppIcon (empty slot) and AccentColor
 ShoppingListTests/
@@ -49,10 +50,36 @@ xcodebuild test -project ShoppingList.xcodeproj -scheme ShoppingList \
   -destination 'platform=iOS Simulator,name=iPhone 15'
 ```
 
+## Set up household sharing (once)
+
+Sharing needs a paid Apple Developer Program membership, which TestFlight needs anyway.
+
+1. In Xcode, select the **ShoppingList** target, then **Signing & Capabilities**.
+2. Click **+ Capability**, add **iCloud**, tick **CloudKit**, and add a container (for example `iCloud.com.roman.shoppinglist`). The app uses the first container listed.
+3. Click **+ Capability** again, add **Background Modes**, and tick **Remote notifications**. This lets a change on one phone wake the others.
+4. Run the app once on a device signed in to iCloud and add an item. That creates the `ListItem` and `HistoryItem` record types in iCloud.
+5. Open the [CloudKit Console](https://icloud.developer.apple.com), pick the container, and in the **Development** environment:
+   - **Indexes:** for both `ListItem` and `HistoryItem`, add a **QUERYABLE** index on `modificationDate`. Without it, phones can't download changes.
+   - **Security Roles:** edit `_icloud` (signed-in users) and give it **Create**, **Read** and **Write** on both record types. By default only the person who added an item can change it.
+6. Before the first TestFlight build, use **Deploy Schema Changes** to copy the schema to **Production**, then repeat the security role change there if it was not copied.
+
+Every phone needs to be signed in to iCloud to send changes. Without it, the app still shows the shared list and says so at the top.
+
+### How sync works
+
+- Each item name (ignoring case) is one record in iCloud. Two phones adding "Milk" while offline end up with one "Milk".
+- The app downloads changes when it opens, every 20 seconds while it is on screen, on pull to refresh, and when iCloud sends a push. Local changes are uploaded right after they happen and retried until they succeed.
+- If two phones change the same item, the most recent change wins.
+- Deleting or clearing an item marks it removed instead of erasing it, so every phone hides it. Adding the name again brings it back.
+- History (suggestions) is shared too.
+- When a phone first runs this version, its existing list and history are uploaded and merged into the shared list.
+- Everyone with the app shares one list. That is right for a TestFlight household, but the app needs a different design before any App Store release.
+
 ## How it works
 
 - Type an item and press Return. The keyboard stays up for the next one.
 - Tap an item to check it off (light haptic, greyed out, strikethrough, moves to the bottom). Tap again to bring it back to the end of the active list.
+- Pull down to check for changes from the rest of the household.
 - Swipe left to delete. Long press to rename inline; press Return (or move focus to the add field) to save, or clear the text to cancel.
 - While typing, suggestion chips from your history appear above the keyboard. One tap adds the item.
 - "Clear checked" sits at the top of the checked section and asks for confirmation when more than 5 items are checked.

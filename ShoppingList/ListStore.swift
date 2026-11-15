@@ -68,11 +68,16 @@ enum ListRules {
 
 /// All list and history mutations. Operates on a `ModelContext` and saves after
 /// every change so data survives app termination (F11).
+///
+/// Every change stamps `modifiedAt` and sets `needsUpload` so `SyncEngine` can send
+/// it to the household. Deletes are soft (`removedAt`) for the same reason; the
+/// reading methods below only return items that are not removed.
+@MainActor
 struct ListStore {
     enum AddOutcome: Equatable {
         /// Input was empty after trimming.
         case ignored
-        /// A new item was created.
+        /// A new item was created (or a deleted one was brought back).
         case added
         /// A checked item with the same name moved back to active (F2).
         case reactivated
@@ -91,15 +96,29 @@ struct ListStore {
 
     let context: ModelContext
     private let now: () -> Date
+    private let didChange: @MainActor () -> Void
 
-    init(context: ModelContext, now: @escaping () -> Date = { Date() }) {
+    /// - Parameter didChange: called after every saved change, so the caller can
+    ///   start an upload.
+    init(
+        context: ModelContext,
+        now: @escaping () -> Date = { Date() },
+        didChange: @escaping @MainActor () -> Void = {}
+    ) {
         self.context = context
         self.now = now
+        self.didChange = didChange
     }
 
     // MARK: Reading
 
+    /// Items on the list (not removed).
     func allItems() -> [ListItem] {
+        allStoredItems().filter { !$0.isRemoved }
+    }
+
+    /// Every stored item, including removed ones.
+    func allStoredItems() -> [ListItem] {
         (try? context.fetch(FetchDescriptor<ListItem>())) ?? []
     }
 
@@ -119,6 +138,11 @@ struct ListStore {
         allItems().first { ListRules.sameName($0.name, name) }
     }
 
+    /// The stored item for this name, removed or not. Prefers one on the list.
+    func storedItem(named name: String) -> ListItem? {
+        item(named: name) ?? allStoredItems().first { ListRules.sameName($0.name, name) }
+    }
+
     func historyItem(named name: String) -> HistoryItem? {
         allHistory().first { ListRules.sameName($0.name, name) }
     }
@@ -135,7 +159,16 @@ struct ListStore {
         guard let name = ListRules.normalized(raw) else { return .ignored }
         let date = now()
 
-        if let existing = item(named: name) {
+        if let existing = storedItem(named: name) {
+            if existing.isRemoved {
+                // Bring a deleted item back as a fresh entry, as typed this time.
+                existing.name = name
+                existing.removedAt = nil
+                activate(existing, at: date)
+                recordUse(of: name, at: date)
+                save()
+                return .added
+            }
             if !existing.isChecked {
                 return .alreadyActive
             }
@@ -145,7 +178,7 @@ struct ListStore {
             return .reactivated
         }
 
-        context.insert(ListItem(name: name, addedAt: date))
+        context.insert(ListItem(name: name, addedAt: date, modifiedAt: date))
         recordUse(of: name, at: date)
         save()
         return .added
@@ -160,13 +193,14 @@ struct ListStore {
         } else {
             item.isChecked = true
             item.checkedAt = date
+            touch(item, at: date)
         }
         save()
     }
 
     /// F6. History is not touched.
     func delete(_ item: ListItem) {
-        context.delete(item)
+        remove(item, at: now())
         save()
     }
 
@@ -174,9 +208,10 @@ struct ListStore {
     /// History is not touched.
     @discardableResult
     func clearChecked() -> Int {
+        let date = now()
         let checked = allItems().filter { $0.isChecked }
         for item in checked {
-            context.delete(item)
+            remove(item, at: date)
         }
         save()
         return checked.count
@@ -201,16 +236,39 @@ struct ListStore {
                 survivor.isChecked = false
                 survivor.checkedAt = nil
                 survivor.addedAt = item.addedAt
+                touch(survivor, at: date)
             }
             // If the survivor was already active it keeps its position.
             // If both were checked, the survivor keeps its checkedAt.
-            context.delete(item)
+            remove(item, at: date)
             addToHistoryIfNew(newName, at: date)
             save()
             return .merged
         }
 
-        item.name = newName
+        if ListRules.sameName(item.name, newName) {
+            // Case-only change: same item, new casing.
+            item.name = newName
+            touch(item, at: date)
+        } else {
+            // Each name is its own shared record, so a rename moves the item's
+            // state to the new name and removes the old one. A previously deleted
+            // item with the new name is reused.
+            let target: ListItem
+            if let removed = storedItem(named: newName) {
+                target = removed
+            } else {
+                target = ListItem(name: newName, addedAt: item.addedAt, modifiedAt: date)
+                context.insert(target)
+            }
+            target.name = newName
+            target.isChecked = item.isChecked
+            target.addedAt = item.addedAt
+            target.checkedAt = item.checkedAt
+            target.removedAt = nil
+            touch(target, at: date)
+            remove(item, at: date)
+        }
         addToHistoryIfNew(newName, at: date)
         save()
         return .renamed
@@ -222,6 +280,22 @@ struct ListStore {
         item.isChecked = false
         item.checkedAt = nil
         item.addedAt = date
+        touch(item, at: date)
+    }
+
+    private func remove(_ item: ListItem, at date: Date) {
+        item.removedAt = date
+        touch(item, at: date)
+    }
+
+    private func touch(_ item: ListItem, at date: Date) {
+        item.modifiedAt = date
+        item.needsUpload = true
+    }
+
+    private func touch(_ entry: HistoryItem, at date: Date) {
+        entry.modifiedAt = date
+        entry.needsUpload = true
     }
 
     /// History rule for adds: create with useCount 1, or bump useCount and lastUsedAt.
@@ -229,8 +303,9 @@ struct ListStore {
         if let entry = historyItem(named: name) {
             entry.useCount += 1
             entry.lastUsedAt = date
+            touch(entry, at: date)
         } else {
-            context.insert(HistoryItem(name: name, useCount: 1, lastUsedAt: date))
+            context.insert(HistoryItem(name: name, useCount: 1, lastUsedAt: date, modifiedAt: date))
         }
     }
 
@@ -238,7 +313,7 @@ struct ListStore {
     /// in history yet; an existing entry (and the old name's entry) is left alone.
     private func addToHistoryIfNew(_ name: String, at date: Date) {
         if historyItem(named: name) == nil {
-            context.insert(HistoryItem(name: name, useCount: 1, lastUsedAt: date))
+            context.insert(HistoryItem(name: name, useCount: 1, lastUsedAt: date, modifiedAt: date))
         }
     }
 
@@ -248,5 +323,6 @@ struct ListStore {
         } catch {
             assertionFailure("Failed to save: \(error)")
         }
+        didChange()
     }
 }
