@@ -3,7 +3,9 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var items: [ListItem]
+    @Environment(SyncEngine.self) private var sync: SyncEngine?
+    /// Removed items stay stored (so the removal reaches every phone) but are hidden.
+    @Query(filter: #Predicate<ListItem> { $0.removedAt == nil }) private var items: [ListItem]
     @Query private var history: [HistoryItem]
 
     @State private var draft = ""
@@ -18,7 +20,9 @@ struct ContentView: View {
         case rename(UUID)
     }
 
-    private var store: ListStore { ListStore(context: modelContext) }
+    private var store: ListStore {
+        ListStore(context: modelContext, didChange: { [sync] in sync?.sync() })
+    }
     private var activeItems: [ListItem] { ListRules.activeSorted(items) }
     private var checkedItems: [ListItem] { ListRules.checkedSorted(items) }
     private var suggestions: [HistoryItem] {
@@ -28,6 +32,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             inputField
+            syncNotice
             Divider()
             if items.isEmpty {
                 emptyState
@@ -114,6 +119,31 @@ struct ContentView: View {
         }
         .listStyle(.plain)
         .scrollDismissesKeyboard(.interactively)
+        .refreshable {
+            await sync?.syncNow()
+        }
+    }
+
+    /// Only shown when sharing is not working, so the normal screen stays clean.
+    @ViewBuilder
+    private var syncNotice: some View {
+        switch sync?.status {
+        case .noAccount:
+            notice("Sign in to iCloud in Settings to share changes with your household.")
+        case .failed:
+            notice("Can't reach iCloud right now. Changes are saved and will sync later.")
+        default:
+            EmptyView()
+        }
+    }
+
+    private func notice(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
     }
 
     private var emptyState: some View {
