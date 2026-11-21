@@ -49,11 +49,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
-    func application(
+    // Nonisolated so the push payload (not Sendable) never crosses onto the
+    // main actor; only the sync call itself hops there.
+    nonisolated func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any]
     ) async -> UIBackgroundFetchResult {
-        guard let sync = SyncEngine.shared else { return .noData }
+        guard let sync = await SyncEngine.shared else { return .noData }
         await sync.syncNow()
         return .newData
     }

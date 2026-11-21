@@ -19,11 +19,27 @@ final class ListItem {
     var checkedAt: Date?
     /// Set when the item is deleted or cleared. Removed items are hidden everywhere.
     var removedAt: Date?
+    /// Stored as optionals so a store written by the version before sharing
+    /// (which has no such columns) opens with SwiftData's automatic migration.
+    /// Rows from that version read as nil. Use `modifiedAt` and `needsUpload`.
+    /// `originalName` also covers stores written by the first sharing build,
+    /// where these were non-optional columns named `modifiedAt` / `needsUpload`.
+    @Attribute(originalName: "modifiedAt") var storedModifiedAt: Date?
+    @Attribute(originalName: "needsUpload") var storedNeedsUpload: Bool?
+
     /// Last local or remote change. The newer side wins when phones disagree.
-    var modifiedAt: Date = Date.distantPast
+    /// Items from before sharing count as older than any change.
+    var modifiedAt: Date {
+        get { storedModifiedAt ?? .distantPast }
+        set { storedModifiedAt = newValue }
+    }
+
     /// True while this phone has a change iCloud has not received yet.
-    /// Defaults to true so items that existed before sharing are uploaded once.
-    var needsUpload: Bool = true
+    /// Items that existed before sharing read as true, so they are uploaded once.
+    var needsUpload: Bool {
+        get { storedNeedsUpload ?? true }
+        set { storedNeedsUpload = newValue }
+    }
 
     init(
         id: UUID = UUID(),
@@ -41,8 +57,8 @@ final class ListItem {
         self.addedAt = addedAt
         self.checkedAt = checkedAt
         self.removedAt = removedAt
-        self.modifiedAt = modifiedAt
-        self.needsUpload = needsUpload
+        self.storedModifiedAt = modifiedAt
+        self.storedNeedsUpload = needsUpload
     }
 
     var isRemoved: Bool { removedAt != nil }
@@ -56,10 +72,21 @@ final class HistoryItem {
     var name: String
     var useCount: Int
     var lastUsedAt: Date
+    /// Optional in storage for the same migration reason as `ListItem`.
+    @Attribute(originalName: "modifiedAt") var storedModifiedAt: Date?
+    @Attribute(originalName: "needsUpload") var storedNeedsUpload: Bool?
+
     /// Last local or remote change. The newer side wins when phones disagree.
-    var modifiedAt: Date = Date.distantPast
+    var modifiedAt: Date {
+        get { storedModifiedAt ?? .distantPast }
+        set { storedModifiedAt = newValue }
+    }
+
     /// True while this phone has a change iCloud has not received yet.
-    var needsUpload: Bool = true
+    var needsUpload: Bool {
+        get { storedNeedsUpload ?? true }
+        set { storedNeedsUpload = newValue }
+    }
 
     init(
         name: String,
@@ -71,7 +98,7 @@ final class HistoryItem {
         self.name = name
         self.useCount = useCount
         self.lastUsedAt = lastUsedAt
-        self.modifiedAt = modifiedAt
-        self.needsUpload = needsUpload
+        self.storedModifiedAt = modifiedAt
+        self.storedNeedsUpload = needsUpload
     }
 }

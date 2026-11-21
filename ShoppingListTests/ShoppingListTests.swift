@@ -391,14 +391,15 @@ struct SharingTests {
     @Test func everyChangeIsMarkedForUpload() throws {
         store.add("eggs")
         #expect(try stored("eggs").needsUpload)
-        #expect(try #require(store.historyItem(named: "eggs")).needsUpload)
+        let eggsHistory = try #require(store.historyItem(named: "eggs"))
+        #expect(eggsHistory.needsUpload)
 
         markAllUploaded()
         let before = try stored("eggs").modifiedAt
         store.toggle(try stored("eggs"))
         #expect(try stored("eggs").needsUpload)
         #expect(try stored("eggs").modifiedAt > before)
-        #expect(try #require(store.historyItem(named: "eggs")).needsUpload == false)
+        #expect(eggsHistory.needsUpload == false)
     }
 
     @Test func activeDuplicateChangesNothing() throws {
@@ -466,7 +467,10 @@ struct SharingTests {
     @Test func recordNameIsValidForCloudKit() {
         let name = SyncRules.recordName(type: "ListItem", name: String(repeating: "Ünïcødé 🥛 ", count: 100))
         #expect(name.count <= 255)
-        #expect(name.allSatisfy(\.isASCII))
+        // Computed outside #expect: the macro rewrites a direct allSatisfy call
+        // into a form that can throw without `try`, which fails to compile.
+        let isASCII = name.allSatisfy { $0.isASCII }
+        #expect(isASCII)
     }
 
     @Test func remoteWinsUnlessLocalChangeIsNewer() {
@@ -478,5 +482,82 @@ struct SharingTests {
         #expect(SyncRules.shouldApplyRemote(localNeedsUpload: true, localModifiedAt: early, remoteModifiedAt: late))
         // Local change waiting and newer: keep it and upload it.
         #expect(SyncRules.shouldApplyRemote(localNeedsUpload: true, localModifiedAt: late, remoteModifiedAt: early) == false)
+    }
+}
+
+// MARK: Updating from the version before sharing
+
+/// The models exactly as the app shipped them before household sharing.
+/// Entity names match the current models, so a store written with these is
+/// what a phone updating from that version has on disk.
+enum PreSharingModels {
+    @Model
+    final class ListItem {
+        var id: UUID
+        var name: String
+        var isChecked: Bool
+        var addedAt: Date
+        var checkedAt: Date?
+
+        init(name: String) {
+            self.id = UUID()
+            self.name = name
+            self.isChecked = false
+            self.addedAt = Date()
+            self.checkedAt = nil
+        }
+    }
+
+    @Model
+    final class HistoryItem {
+        var name: String
+        var useCount: Int
+        var lastUsedAt: Date
+
+        init(name: String) {
+            self.name = name
+            self.useCount = 1
+            self.lastUsedAt = Date()
+        }
+    }
+}
+
+@MainActor
+struct MigrationTests {
+    @Test func storeFromBeforeSharingOpensAndIsUploadedOnce() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("list.store")
+
+        // Write a store with the old models, then let go of it.
+        try autoreleasepool {
+            let schema = Schema([PreSharingModels.ListItem.self, PreSharingModels.HistoryItem.self])
+            let container = try ModelContainer(
+                for: schema,
+                configurations: ModelConfiguration(schema: schema, url: url)
+            )
+            let context = ModelContext(container)
+            context.insert(PreSharingModels.ListItem(name: "milk"))
+            context.insert(PreSharingModels.HistoryItem(name: "milk"))
+            try context.save()
+        }
+
+        // Open the same file with the current models, as the updated app does.
+        let schema = Schema([ListItem.self, HistoryItem.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: ModelConfiguration(schema: schema, url: url)
+        )
+        let store = ListStore(context: ModelContext(container))
+
+        let milk = try #require(store.item(named: "milk"))
+        #expect(milk.isRemoved == false)
+        #expect(milk.needsUpload)
+        #expect(milk.modifiedAt == .distantPast)
+        let entry = try #require(store.historyItem(named: "milk"))
+        #expect(entry.needsUpload)
+        #expect(entry.useCount == 1)
     }
 }
