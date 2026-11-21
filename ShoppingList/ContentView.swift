@@ -319,6 +319,11 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
-        .modelContainer(for: [ListItem.self, HistoryItem.self], inMemory: true)
+    let configuration = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+    let container = try! ModelContainer(
+        for: ListItem.self, HistoryItem.self,
+        configurations: configuration
+    )
+    return ContentView()
+        .modelContainer(container)
 }

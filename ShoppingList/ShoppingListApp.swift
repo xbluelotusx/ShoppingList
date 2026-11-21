@@ -12,7 +12,15 @@ struct ShoppingListApp: App {
 
     init() {
         do {
-            container = try ModelContainer(for: ListItem.self, HistoryItem.self)
+            // Household sharing goes through SyncEngine and the public iCloud
+            // database. With the iCloud capability on, SwiftData would otherwise
+            // also try to mirror the store to the private database by default,
+            // which these models don't support, and the store would not open.
+            let configuration = ModelConfiguration(cloudKitDatabase: .none)
+            container = try ModelContainer(
+                for: ListItem.self, HistoryItem.self,
+                configurations: configuration
+            )
         } catch {
             fatalError("Could not open the shopping list store: \(error)")
         }
