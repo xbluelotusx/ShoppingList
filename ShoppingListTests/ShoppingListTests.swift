@@ -467,7 +467,10 @@ struct SharingTests {
     @Test func recordNameIsValidForCloudKit() {
         let name = SyncRules.recordName(type: "ListItem", name: String(repeating: "Ünïcødé 🥛 ", count: 100))
         #expect(name.count <= 255)
-        #expect(name.allSatisfy(\.isASCII))
+        // Computed outside #expect: the macro rewrites a direct allSatisfy call
+        // into a form that can throw without `try`, which fails to compile.
+        let isASCII = name.allSatisfy { $0.isASCII }
+        #expect(isASCII)
     }
 
     @Test func remoteWinsUnlessLocalChangeIsNewer() {
