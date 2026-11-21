@@ -391,14 +391,15 @@ struct SharingTests {
     @Test func everyChangeIsMarkedForUpload() throws {
         store.add("eggs")
         #expect(try stored("eggs").needsUpload)
-        #expect(try #require(store.historyItem(named: "eggs")).needsUpload)
+        let eggsHistory = try #require(store.historyItem(named: "eggs"))
+        #expect(eggsHistory.needsUpload)
 
         markAllUploaded()
         let before = try stored("eggs").modifiedAt
         store.toggle(try stored("eggs"))
         #expect(try stored("eggs").needsUpload)
         #expect(try stored("eggs").modifiedAt > before)
-        #expect(try #require(store.historyItem(named: "eggs")).needsUpload == false)
+        #expect(eggsHistory.needsUpload == false)
     }
 
     @Test func activeDuplicateChangesNothing() throws {
