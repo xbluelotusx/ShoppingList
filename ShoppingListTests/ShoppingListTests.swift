@@ -264,14 +264,16 @@ struct ShoppingListTests {
 
     @Test func renameWithEmptyNameCancels() throws {
         store.add("milk")
-        #expect(store.rename(try item("milk"), to: "   ") == .cancelled)
+        let target = try item("milk")
+        #expect(store.rename(target, to: "   ") == .cancelled)
         #expect(activeNames() == ["milk"])
         #expect(store.allHistory().count == 1)
     }
 
     @Test func renameCaseOnlyKeepsSingleItem() throws {
         store.add("milk")
-        #expect(store.rename(try item("milk"), to: "Milk") == .renamed)
+        let target = try item("milk")
+        #expect(store.rename(target, to: "Milk") == .renamed)
         #expect(activeNames() == ["Milk"])
         #expect(store.allHistory().count == 1)
     }
@@ -283,7 +285,8 @@ struct ShoppingListTests {
         store.toggle(try item("milk"))
 
         let breadAddedAt = try item("bread").addedAt
-        #expect(store.rename(try item("bread"), to: "MILK") == .merged)
+        let target = try item("bread")
+        #expect(store.rename(target, to: "MILK") == .merged)
 
         #expect(store.allItems().count == 2)
         let milk = try item("milk")
@@ -300,7 +303,8 @@ struct ShoppingListTests {
         store.add("bread")
         store.toggle(try item("bread"))
 
-        #expect(store.rename(try item("bread"), to: "milk") == .merged)
+        let target = try item("bread")
+        #expect(store.rename(target, to: "milk") == .merged)
         #expect(activeNames() == ["milk"])
         #expect(checkedNames().isEmpty)
     }
@@ -311,7 +315,8 @@ struct ShoppingListTests {
         store.toggle(try item("milk"))
         store.toggle(try item("bread"))
 
-        #expect(store.rename(try item("bread"), to: "milk") == .merged)
+        let target = try item("bread")
+        #expect(store.rename(target, to: "milk") == .merged)
         #expect(activeNames().isEmpty)
         #expect(checkedNames() == ["milk"])
     }
@@ -424,7 +429,8 @@ struct SharingTests {
         store.delete(try stored("oat milk"))
         store.add("milk")
 
-        #expect(store.rename(try stored("milk"), to: "Oat Milk") == .renamed)
+        let target = try stored("milk")
+        #expect(store.rename(target, to: "Oat Milk") == .renamed)
         #expect(try stored("oat milk").id == id)
         #expect(store.allStoredItems().count == 2)
     }
@@ -432,7 +438,8 @@ struct SharingTests {
     @Test func mergeRemovesRenamedItemSoftly() throws {
         store.add("milk")
         store.add("bread")
-        #expect(store.rename(try stored("bread"), to: "milk") == .merged)
+        let target = try stored("bread")
+        #expect(store.rename(target, to: "milk") == .merged)
         #expect(store.allItems().map(\.name) == ["milk"])
         #expect(try stored("bread").isRemoved)
     }
