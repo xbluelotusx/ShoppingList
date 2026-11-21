@@ -21,9 +21,22 @@
 		5E1A7C0F2B3D4E5F6A7B0007 /* ShoppingListTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShoppingListTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5E1A7C0F2B3D4E5F6A7B0030 /* Exceptions for "ShoppingList" folder in "ShoppingList" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 5E1A7C0F2B3D4E5F6A7B0008 /* ShoppingList */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		5E1A7C0F2B3D4E5F6A7B0004 /* ShoppingList */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5E1A7C0F2B3D4E5F6A7B0030 /* Exceptions for "ShoppingList" folder in "ShoppingList" target */,
+			);
 			path = ShoppingList;
 			sourceTree = "<group>";
 		};
