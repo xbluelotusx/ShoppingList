@@ -259,8 +259,10 @@ final class SyncEngine {
     // MARK: Upload
 
     private func upload(to database: CKDatabase) async throws {
-        let items = try context.fetch(FetchDescriptor<ListItem>(predicate: #Predicate<ListItem> { $0.needsUpload }))
-        let history = try context.fetch(FetchDescriptor<HistoryItem>(predicate: #Predicate<HistoryItem> { $0.needsUpload }))
+        // Filtered in memory: `needsUpload` is computed (nil in storage means
+        // true), so it cannot go in a fetch predicate. The list is small.
+        let items = try context.fetch(FetchDescriptor<ListItem>()).filter(\.needsUpload)
+        let history = try context.fetch(FetchDescriptor<HistoryItem>()).filter(\.needsUpload)
         guard !items.isEmpty || !history.isEmpty else { return }
 
         // What was sent, so a change made during the upload is not marked as sent.
