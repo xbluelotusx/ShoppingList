@@ -1,0 +1,5 @@
+# App Store Connect identity for ShoppingList.
+# Credentials are not stored here: the beta lane reads them from environment
+# variables (see fastlane/Fastfile).
+app_identifier("com.roman.shoppinglist")
+team_id("CFD9Q7JUZ6")

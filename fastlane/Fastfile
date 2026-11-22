@@ -1,0 +1,65 @@
+require "shellwords"
+
+default_platform(:ios)
+
+platform :ios do
+  # Reads an environment variable or stops with a clear message.
+  def required_env(name)
+    value = ENV[name].to_s.strip
+    UI.user_error!("Set #{name} in your environment before running this lane.") if value.empty?
+    value
+  end
+
+  desc "Bump the build number, build the app, and upload it to TestFlight"
+  lane :beta do
+    key_id = required_env("ASC_KEY_ID")
+    issuer_id = required_env("ASC_ISSUER_ID")
+    key_path = File.expand_path(required_env("ASC_KEY_PATH"))
+
+    api_key = app_store_connect_api_key(
+      key_id: key_id,
+      issuer_id: issuer_id,
+      key_filepath: key_path
+    )
+
+    # Next build number = the highest one App Store Connect has seen, plus 1.
+    # Asking App Store Connect (instead of reading the project) keeps the number
+    # right on any Mac, and the project file is not modified or committed.
+    build_number = latest_testflight_build_number(
+      api_key: api_key,
+      initial_build_number: 0
+    ) + 1
+    UI.message("Build number: #{build_number}")
+
+    # Lets xcodebuild create or refresh the distribution certificate and
+    # provisioning profile through the API key (automatic signing).
+    signing_args = [
+      "-allowProvisioningUpdates",
+      "-authenticationKeyPath", key_path,
+      "-authenticationKeyID", key_id,
+      "-authenticationKeyIssuerID", issuer_id
+    ].shelljoin
+
+    build_app(
+      project: "ShoppingList.xcodeproj",
+      scheme: "ShoppingList",
+      configuration: "Release",
+      export_method: "app-store",
+      export_options: {
+        signingStyle: "automatic",
+        teamID: CredentialsManager::AppfileConfig.try_fetch_value(:team_id)
+      },
+      xcargs: "#{signing_args} CURRENT_PROJECT_VERSION=#{build_number}",
+      export_xcargs: signing_args,
+      output_directory: "build",
+      clean: true
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true
+    )
+
+    UI.success("Build #{build_number} uploaded. It appears in TestFlight after Apple finishes processing.")
+  end
+end

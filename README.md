@@ -75,6 +75,34 @@ Every phone needs to be signed in to iCloud to send changes. Without it, the app
 - When a phone first runs this version, its existing list and history are uploaded and merged into the shared list.
 - Everyone with the app shares one list. That is right for a TestFlight household, but the app needs a different design before any App Store release.
 
+## Ship to TestFlight
+
+Uploads go through [fastlane](https://fastlane.tools) with an App Store Connect API key. One-time setup on your Mac:
+
+1. Install fastlane: `brew install fastlane`.
+2. Create an API key with the **Admin** role in App Store Connect (**Users and Access → Integrations → App Store Connect API**). Download the `.p8` file once and keep it outside the repo, for example in `~/.appstoreconnect/`.
+3. Add these to your shell profile (`~/.zshrc`), with your own values:
+
+   ```bash
+   export ASC_KEY_ID="..."
+   export ASC_ISSUER_ID="..."
+   export ASC_KEY_PATH="$HOME/.appstoreconnect/AuthKey_XXXXXXXXXX.p8"
+   ```
+
+Then, from the project folder:
+
+```bash
+fastlane beta
+```
+
+The `beta` lane:
+
+1. Asks App Store Connect for the highest build number so far and uses that plus 1. The project file is not changed.
+2. Archives the Release build, letting Xcode create or refresh the distribution certificate and profile through the API key (automatic signing, team `CFD9Q7JUZ6`).
+3. Uploads it to TestFlight without waiting for Apple's processing. The build shows up in TestFlight a few minutes later.
+
+To ship a new app version instead of a new build, change **Version** (`MARKETING_VERSION`) in Xcode first.
+
 ## How it works
 
 - Type an item and press Return. The keyboard stays up for the next one.
