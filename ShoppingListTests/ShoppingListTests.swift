@@ -1,3 +1,4 @@
+import CloudKit
 import Foundation
 import SwiftData
 import Testing
@@ -482,6 +483,47 @@ struct SharingTests {
         #expect(SyncRules.shouldApplyRemote(localNeedsUpload: true, localModifiedAt: early, remoteModifiedAt: late))
         // Local change waiting and newer: keep it and upload it.
         #expect(SyncRules.shouldApplyRemote(localNeedsUpload: true, localModifiedAt: late, remoteModifiedAt: early) == false)
+    }
+
+    // MARK: Sync problems
+
+    @Test func problemNamesStepReasonAndExactCode() {
+        let problem = SyncProblem(step: .upload, error: CKError(.networkUnavailable))
+        #expect(problem.code == CKError.Code.networkUnavailable.rawValue)
+        #expect(problem.message.hasPrefix("Can't upload your changes."))
+        #expect(problem.message.contains("No internet connection"))
+        #expect(problem.message.contains("CloudKit error \(CKError.Code.networkUnavailable.rawValue)"))
+    }
+
+    @Test func permissionProblemPointsAtSecurityRoles() {
+        let problem = SyncProblem(step: .upload, error: CKError(.permissionFailure))
+        #expect(problem.message.contains("_icloud security role"))
+    }
+
+    @Test func rejectedRequestPointsAtSchema() {
+        let problem = SyncProblem(step: .liveUpdates, error: CKError(.serverRejectedRequest))
+        #expect(problem.message.hasPrefix("Live updates are off"))
+        #expect(problem.message.contains("CloudKit Console (Production)"))
+    }
+
+    @Test func batchFailureReportsTheRecordsOwnError() {
+        let recordError = CKError(.permissionFailure)
+        let batch = CKError(.partialFailure, userInfo: [
+            CKPartialErrorsByItemIDKey: [CKRecord.ID(recordName: "ListItem-x"): recordError]
+        ])
+        let problem = SyncProblem(step: .upload, error: batch)
+        #expect(problem.code == CKError.Code.permissionFailure.rawValue)
+        #expect(problem.message.contains("_icloud security role"))
+    }
+
+    @Test func nonCloudKitErrorKeepsItsDescription() {
+        struct DiskFull: LocalizedError {
+            var errorDescription: String? { "The disk is full." }
+        }
+        let problem = SyncProblem(step: .download, error: DiskFull())
+        #expect(problem.code == nil)
+        #expect(problem.message.hasPrefix("Can't download the shared list."))
+        #expect(problem.message.contains("(The disk is full.)"))
     }
 }
 
