@@ -20,7 +20,7 @@ struct ShoppingListTests {
     let store: ListStore
 
     init() throws {
-        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         container = try ModelContainer(
             for: ListItem.self, HistoryItem.self,
             configurations: configuration
@@ -332,7 +332,7 @@ struct SharingTests {
     let clock: TestClock
 
     init() throws {
-        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         container = try ModelContainer(
             for: ListItem.self, HistoryItem.self,
             configurations: configuration
@@ -536,7 +536,7 @@ struct MigrationTests {
             let schema = Schema([PreSharingModels.ListItem.self, PreSharingModels.HistoryItem.self])
             let container = try ModelContainer(
                 for: schema,
-                configurations: ModelConfiguration(schema: schema, url: url)
+                configurations: ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)
             )
             let context = ModelContext(container)
             context.insert(PreSharingModels.ListItem(name: "milk"))
@@ -548,7 +548,7 @@ struct MigrationTests {
         let schema = Schema([ListItem.self, HistoryItem.self])
         let container = try ModelContainer(
             for: schema,
-            configurations: ModelConfiguration(schema: schema, url: url)
+            configurations: ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)
         )
         let store = ListStore(context: ModelContext(container))
 
