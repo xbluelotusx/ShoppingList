@@ -57,11 +57,14 @@ Sharing needs a paid Apple Developer Program membership, which TestFlight needs 
 1. In Xcode, select the **ShoppingList** target, then **Signing & Capabilities**.
 2. Click **+ Capability**, add **iCloud**, tick **CloudKit**, and add a container (for example `iCloud.com.roman.shoppinglist`). The app uses the first container listed.
 3. Click **+ Capability** again, add **Background Modes**, and tick **Remote notifications**. This lets a change on one phone wake the others.
-4. Run the app once on a device signed in to iCloud and add an item. That creates the `ListItem` and `HistoryItem` record types in iCloud.
+4. Run the app from Xcode once, on a simulator or device signed in to iCloud, and add an item. Builds from Xcode use the **Development** environment; TestFlight builds use **Production**. This run creates the `ListItem` and `HistoryItem` record types and the app's two change subscriptions (`ListItem-changes`, `HistoryItem-changes`) in Development.
+   - If the record types are missing afterwards, create them by hand under **Record Types**. `ListItem`: `name` (String), `isChecked` (Int64), `addedAt`, `checkedAt`, `removedAt`, `modifiedAt` (Date/Time). `HistoryItem`: `name` (String), `useCount` (Int64), `lastUsedAt`, `modifiedAt` (Date/Time).
 5. Open the [CloudKit Console](https://icloud.developer.apple.com), pick the container, and in the **Development** environment:
-   - **Indexes:** for both `ListItem` and `HistoryItem`, add a **QUERYABLE** index on `modificationDate`. Without it, phones can't download changes.
+   - **Indexes:** for both `ListItem` and `HistoryItem`, add a **QUERYABLE** index on the modification date (the Console calls it `modifiedTimestamp`) and on `recordName`. Without the first, phones can't download changes.
    - **Security Roles:** edit `_icloud` (signed-in users) and give it **Create**, **Read** and **Write** on both record types. By default only the person who added an item can change it.
-6. Before the first TestFlight build, use **Deploy Schema Changes** to copy the schema to **Production**, then repeat the security role change there if it was not copied.
+   - **Subscriptions:** check that `ListItem-changes` and `HistoryItem-changes` are listed (public database). If not, repeat step 4.
+6. Before the first TestFlight build, use **Deploy Schema Changes** to copy the schema to **Production**, then check that the indexes and security role arrived there.
+   - Deploy only after the subscriptions exist in Development, even though the deploy window doesn't list them. Otherwise Production refuses the app's subscriptions with *CloudKit error 12: attempting to create a subscription in a production container*, and the app shows "Live updates are off" (the list still syncs every 20 seconds). This is a reported CloudKit bug; deploying again after step 4 fixed it.
 
 Every phone needs to be signed in to iCloud to send changes. Without it, the app still shows the shared list and says so at the top.
 
