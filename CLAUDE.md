@@ -5,6 +5,8 @@ app's public iCloud database. See README.md for layout, rules and the sharing de
 
 - Business rules live in `ShoppingList/ListStore.swift`; the view only calls into it.
 - Sync lives in `ShoppingList/SyncEngine.swift`.
+- Feature ideas live in `BACKLOG.md`. Add new ideas there, and move an item to Done
+  with its PR link when it ships.
 - Tests: `xcodebuild test -project ShoppingList.xcodeproj -scheme ShoppingList -destination 'platform=iOS Simulator,name=iPhone 16'`
   (macOS only).
 
