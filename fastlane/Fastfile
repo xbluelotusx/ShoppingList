@@ -40,19 +40,41 @@ platform :ios do
       "-authenticationKeyIssuerID", issuer_id
     ].shelljoin
 
+    # Relative to the project root, where fastlane runs actions.
+    archive_path = "build/ShoppingList.xcarchive"
+
+    # Archive and export run as two separate steps. In a single build_app call,
+    # gym appends the build's xcargs to `xcodebuild -exportArchive` as well, so
+    # the export got CURRENT_PROJECT_VERSION=... and every signing flag twice,
+    # the likely cause of the export's usage error (xcodebuild status 64).
+    # Splitting the steps gives each command only the arguments it accepts.
+
+    # Step 1: archive, stamping the build number into this build only.
     build_app(
       project: "ShoppingList.xcodeproj",
       scheme: "ShoppingList",
       configuration: "Release",
+      archive_path: archive_path,
+      skip_package_ipa: true,
+      xcargs: "#{signing_args} CURRENT_PROJECT_VERSION=#{build_number}",
+      clean: true
+    )
+
+    # Step 2: export the archive for App Store Connect.
+    # fastlane only accepts "app-store" here (it rejects "app-store-connect");
+    # Xcode treats "app-store" as a deprecated alias and still accepts it.
+    build_app(
+      project: "ShoppingList.xcodeproj",
+      scheme: "ShoppingList",
+      archive_path: archive_path,
+      skip_build_archive: true,
       export_method: "app-store",
       export_options: {
         signingStyle: "automatic",
         teamID: CredentialsManager::AppfileConfig.try_fetch_value(:team_id)
       },
-      xcargs: "#{signing_args} CURRENT_PROJECT_VERSION=#{build_number}",
       export_xcargs: signing_args,
-      output_directory: "build",
-      clean: true
+      output_directory: "build"
     )
 
     upload_to_testflight(
