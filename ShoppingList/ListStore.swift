@@ -97,17 +97,23 @@ struct ListStore {
     let context: ModelContext
     private let now: () -> Date
     private let didChange: @MainActor () -> Void
+    private let didAdd: @MainActor (String) -> Void
 
-    /// - Parameter didChange: called after every saved change, so the caller can
-    ///   start an upload.
+    /// - Parameters:
+    ///   - didChange: called after every saved change, so the caller can start an upload.
+    ///   - didAdd: called with the item's name when it is put on the list (new,
+    ///     brought back after a delete, or a checked item made active again), so
+    ///     the household can be told.
     init(
         context: ModelContext,
         now: @escaping () -> Date = { Date() },
-        didChange: @escaping @MainActor () -> Void = {}
+        didChange: @escaping @MainActor () -> Void = {},
+        didAdd: @escaping @MainActor (String) -> Void = { _ in }
     ) {
         self.context = context
         self.now = now
         self.didChange = didChange
+        self.didAdd = didAdd
     }
 
     // MARK: Reading
@@ -167,6 +173,7 @@ struct ListStore {
                 activate(existing, at: date)
                 recordUse(of: name, at: date)
                 save()
+                didAdd(name)
                 return .added
             }
             if !existing.isChecked {
@@ -175,12 +182,14 @@ struct ListStore {
             activate(existing, at: date)
             recordUse(of: name, at: date)
             save()
+            didAdd(existing.name)
             return .reactivated
         }
 
         context.insert(ListItem(name: name, addedAt: date, modifiedAt: date))
         recordUse(of: name, at: date)
         save()
+        didAdd(name)
         return .added
     }
 

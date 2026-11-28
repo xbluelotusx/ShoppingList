@@ -1,0 +1,2 @@
+/* The "items added" push. %@ is the text another phone sent, for example "Added Milk and Eggs". */
+"ADDED_NOTICE" = "%@";
