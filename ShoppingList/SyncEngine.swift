@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import os
 import SwiftData
+import UIKit
 
 /// Pure sync rules with no CloudKit or persistence, so they can be unit tested.
 enum SyncRules {
@@ -35,6 +36,40 @@ enum SyncRules {
     static let pollInterval: Duration = .seconds(20)
 }
 
+/// Pure rules for the "items added" notification, so they can be unit tested.
+///
+/// A phone collects the names it adds and sends one notice for the whole batch,
+/// so a partner adding 20 items causes one push, not 20.
+enum AddedNoticeRules {
+    static let recordType = "AddedNotice"
+    /// A batch is sent once no item has been added for this long, or right away
+    /// when the app leaves the screen.
+    static let quietPeriod: TimeInterval = 120
+    /// Names listed in the notice before the rest are counted.
+    static let namesShown = 3
+
+    /// Adds a name to the batch, once per name (case-insensitive).
+    static func adding(_ name: String, to batch: [String]) -> [String] {
+        batch.contains { ListRules.sameName($0, name) } ? batch : batch + [name]
+    }
+
+    /// Whether the batch should be sent now.
+    static func isDue(lastAddedAt: Date?, now: Date, leavingApp: Bool) -> Bool {
+        guard let lastAddedAt else { return false }
+        return leavingApp || now.timeIntervalSince(lastAddedAt) >= quietPeriod
+    }
+
+    /// The notification text, for example "Added Milk, Eggs, Bread and 17 more".
+    static func message(for names: [String]) -> String? {
+        guard !names.isEmpty else { return nil }
+        if names.count <= namesShown {
+            return "Added " + ListFormatter.localizedString(byJoining: names)
+        }
+        let shown = names.prefix(namesShown).joined(separator: ", ")
+        return "Added \(shown) and \(names.count - namesShown) more"
+    }
+}
+
 /// One thing that went wrong while syncing, worded so the person can act on it
 /// and detailed enough (step, CloudKit code, server text) to diagnose it.
 struct SyncProblem: Equatable {
@@ -44,6 +79,8 @@ struct SyncProblem: Equatable {
         case upload
         /// The change alerts that let other phones' edits arrive right away.
         case liveUpdates
+        /// The "items added" notification for the rest of the household.
+        case addedNotice
     }
 
     let step: Step
@@ -86,6 +123,7 @@ struct SyncProblem: Equatable {
         case .account: "Can't check your iCloud account."
         case .upload: "Can't upload your changes. They are saved on this phone."
         case .liveUpdates: "Live updates are off, so other phones' changes appear within 20 seconds instead of instantly."
+        case .addedNotice: "Can't notify the household about the items you added. The items themselves are shared."
         }
     }
 
@@ -99,7 +137,7 @@ struct SyncProblem: Equatable {
         case .notAuthenticated:
             return "Sign in to iCloud in Settings, at the top under your name."
         case .permissionFailure:
-            return "iCloud refused permission. In CloudKit Console (Production), the _icloud security role needs Create, Read and Write on ListItem and HistoryItem."
+            return "iCloud refused permission. In CloudKit Console (Production), the _icloud security role needs Create, Read and Write on ListItem, HistoryItem and AddedNotice."
         case .quotaExceeded:
             return "The app's shared iCloud storage is full. This is the app's storage, not yours."
         case .requestRateLimited, .serviceUnavailable, .zoneBusy:
@@ -152,8 +190,19 @@ final class SyncEngine {
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private let log = Logger(subsystem: "ShoppingList", category: "Sync")
 
+    /// Set when the app leaves the screen, so the next pass sends the batch now.
+    @ObservationIgnored private var leavingApp = false
+    @ObservationIgnored private var noticeTimer: Task<Void, Never>?
+    /// The "items added" notice could not be sent. Kept apart from the change
+    /// alerts so fixing one does not hide the other.
+    private(set) var addedNoticeProblem: SyncProblem?
+
     private let lastDownloadKey = "sync.lastDownload"
     private let subscribedKey = "sync.subscribed.v1"
+    private let noticeSubscribedKey = "sync.addedNoticeSubscribed.v1"
+    private let pendingNamesKey = "notice.pendingNames"
+    private let lastAddedKey = "notice.lastAddedAt"
+    private let installIDKey = "notice.installID"
 
     init(context: ModelContext) {
         self.context = context
@@ -189,6 +238,33 @@ final class SyncEngine {
             }
         } else {
             await runPasses()
+        }
+    }
+
+    /// Remembers an item this phone put on the list, for the next notice. Kept on
+    /// disk so a batch survives the app being closed before it is sent.
+    func noteAdded(_ name: String) {
+        let names = defaults.stringArray(forKey: pendingNamesKey) ?? []
+        defaults.set(AddedNoticeRules.adding(name, to: names), forKey: pendingNamesKey)
+        defaults.set(Date(), forKey: lastAddedKey)
+
+        // Restart the quiet period; when it ends with no new item, send.
+        noticeTimer?.cancel()
+        noticeTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(AddedNoticeRules.quietPeriod))
+            guard !Task.isCancelled else { return }
+            self?.sync()
+        }
+    }
+
+    /// Sends what is pending, including the notice, before iOS suspends the app.
+    func leaveApp() {
+        guard container != nil else { return }
+        leavingApp = true
+        let task = UIApplication.shared.beginBackgroundTask(withName: "Sync")
+        Task {
+            await syncNow()
+            UIApplication.shared.endBackgroundTask(task)
         }
     }
 
@@ -235,10 +311,23 @@ final class SyncEngine {
             try await upload(to: database)
             status = .idle
         } catch {
+            leavingApp = false
             let problem = SyncProblem(step: step, error: error)
             log.error("Sync failed: \(problem.message, privacy: .public)")
             status = .failed(problem)
             return
+        }
+
+        // Sent after the upload, so the items are in iCloud before anyone
+        // opens the notification.
+        do {
+            try await sendAddedNoticeIfDue(database)
+            try await subscribeToAddedNoticesIfNeeded(database)
+            addedNoticeProblem = nil
+        } catch {
+            let problem = SyncProblem(step: .addedNotice, error: error)
+            log.error("Added notice failed: \(problem.message, privacy: .public)")
+            addedNoticeProblem = problem
         }
 
         // Kept apart: without change alerts the list still syncs by polling.
@@ -456,5 +545,65 @@ final class SyncEngine {
             _ = try await database.save(subscription)
         }
         defaults.set(true, forKey: subscribedKey)
+    }
+
+    // MARK: Added notice
+
+    /// Identifies this install, so a phone is not notified about its own items.
+    private var installID: String {
+        if let id = defaults.string(forKey: installIDKey) { return id }
+        let id = UUID().uuidString
+        defaults.set(id, forKey: installIDKey)
+        return id
+    }
+
+    /// Saves one `AddedNotice` record for the batch, which iCloud turns into a
+    /// push on the other phones. Names that are no longer active (deleted or
+    /// checked off before the batch went out) are left out.
+    private func sendAddedNoticeIfDue(_ database: CKDatabase) async throws {
+        let leaving = leavingApp
+        leavingApp = false
+        let lastAddedAt = defaults.object(forKey: lastAddedKey) as? Date
+        guard AddedNoticeRules.isDue(lastAddedAt: lastAddedAt, now: Date(), leavingApp: leaving) else { return }
+
+        let pending = defaults.stringArray(forKey: pendingNamesKey) ?? []
+        let store = ListStore(context: context)
+        let names = pending.filter { store.item(named: $0)?.isChecked == false }
+
+        if let message = AddedNoticeRules.message(for: names) {
+            let record = CKRecord(recordType: AddedNoticeRules.recordType)
+            record.setObject(message as NSString, forKey: "message")
+            record.setObject(installID as NSString, forKey: "sender")
+            _ = try await database.save(record)
+            log.info("Sent added notice for \(names.count) items")
+        }
+
+        // Only clear what was sent; items added during the save stay pending.
+        let now = defaults.stringArray(forKey: pendingNamesKey) ?? []
+        let rest = Array(now.dropFirst(pending.count))
+        defaults.set(rest, forKey: pendingNamesKey)
+        if rest.isEmpty {
+            defaults.removeObject(forKey: lastAddedKey)
+        }
+    }
+
+    /// Asks iCloud for a visible notification when another phone sends a notice.
+    private func subscribeToAddedNoticesIfNeeded(_ database: CKDatabase) async throws {
+        guard !defaults.bool(forKey: noticeSubscribedKey) else { return }
+        let subscription = CKQuerySubscription(
+            recordType: AddedNoticeRules.recordType,
+            predicate: NSPredicate(format: "sender != %@", installID),
+            subscriptionID: "\(AddedNoticeRules.recordType)-\(installID)",
+            options: [.firesOnRecordCreation]
+        )
+        let info = CKSubscription.NotificationInfo()
+        info.title = "Shopping list"
+        // The text comes from the record's `message` field (see Localizable.strings).
+        info.alertLocalizationKey = "ADDED_NOTICE"
+        info.alertLocalizationArgs = ["message"]
+        info.soundName = "default"
+        subscription.notificationInfo = info
+        _ = try await database.save(subscription)
+        defaults.set(true, forKey: noticeSubscribedKey)
     }
 }

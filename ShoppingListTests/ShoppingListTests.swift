@@ -454,6 +454,67 @@ struct SharingTests {
         #expect(calls == 1)
     }
 
+    @Test func didAddReportsItemsPutOnTheList() throws {
+        var added: [String] = []
+        let store = ListStore(context: context, didAdd: { added.append($0) })
+        store.add("Milk")
+        store.add("milk")                                  // already active: not an addition
+        store.add("  ")                                    // ignored
+        store.toggle(try #require(store.item(named: "Milk")))
+        store.add("MILK")                                  // checked item made active again
+        store.delete(try #require(store.item(named: "Milk")))
+        store.add("Eggs")
+        let eggs = try #require(store.item(named: "Eggs"))
+        store.rename(eggs, to: "Free-range eggs")          // a rename is not an addition
+        #expect(added == ["Milk", "Milk", "Eggs"])
+    }
+
+    @Test func deletedItemAddedAgainCountsAsAdded() throws {
+        var added: [String] = []
+        let store = ListStore(context: context, didAdd: { added.append($0) })
+        store.add("Milk")
+        store.delete(try #require(store.item(named: "Milk")))
+        store.add("milk")
+        #expect(added == ["Milk", "milk"])
+    }
+
+    // MARK: Added notice
+
+    @Test func batchKeepsEachNameOnce() {
+        var batch: [String] = []
+        for name in ["Milk", "Eggs", "milk", " MILK "] {
+            batch = AddedNoticeRules.adding(name, to: batch)
+        }
+        #expect(batch == ["Milk", "Eggs"])
+    }
+
+    @Test func batchIsSentAfterQuietPeriodOrOnLeaving() {
+        let added = Date(timeIntervalSince1970: 1_000)
+        let soon = added.addingTimeInterval(AddedNoticeRules.quietPeriod - 1)
+        let later = added.addingTimeInterval(AddedNoticeRules.quietPeriod)
+        #expect(AddedNoticeRules.isDue(lastAddedAt: added, now: soon, leavingApp: false) == false)
+        #expect(AddedNoticeRules.isDue(lastAddedAt: added, now: later, leavingApp: false))
+        #expect(AddedNoticeRules.isDue(lastAddedAt: added, now: soon, leavingApp: true))
+        // Nothing added: nothing to send, even when leaving.
+        #expect(AddedNoticeRules.isDue(lastAddedAt: nil, now: later, leavingApp: true) == false)
+    }
+
+    @Test func noticeTextListsFewNamesAndCountsTheRest() {
+        #expect(AddedNoticeRules.message(for: []) == nil)
+        #expect(AddedNoticeRules.message(for: ["Milk"]) == "Added Milk")
+        let three = AddedNoticeRules.message(for: ["Milk", "Eggs", "Bread"])
+        #expect(three?.hasPrefix("Added Milk, Eggs") == true)
+        #expect(three?.hasSuffix("Bread") == true)
+        let twenty = (1...20).map { "Item \($0)" }
+        #expect(AddedNoticeRules.message(for: twenty) == "Added Item 1, Item 2, Item 3 and 17 more")
+    }
+
+    @Test func noticeProblemSaysTheItemsAreStillShared() {
+        let problem = SyncProblem(step: .addedNotice, error: CKError(.permissionFailure))
+        #expect(problem.message.hasPrefix("Can't notify the household"))
+        #expect(problem.message.contains("AddedNotice"))
+    }
+
     // MARK: Sync rules
 
     @Test func recordNameIsCaseAndSpaceInsensitive() {

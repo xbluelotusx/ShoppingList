@@ -57,11 +57,11 @@ Sharing needs a paid Apple Developer Program membership, which TestFlight needs 
 1. In Xcode, select the **ShoppingList** target, then **Signing & Capabilities**.
 2. Click **+ Capability**, add **iCloud**, tick **CloudKit**, and add a container (for example `iCloud.com.roman.shoppinglist`). The app uses the first container listed.
 3. Click **+ Capability** again, add **Background Modes**, and tick **Remote notifications**. This lets a change on one phone wake the others.
-4. Run the app from Xcode once, on a simulator or device signed in to iCloud, and add an item. Builds from Xcode use the **Development** environment; TestFlight builds use **Production**. This run creates the `ListItem` and `HistoryItem` record types and the app's two change subscriptions (`ListItem-changes`, `HistoryItem-changes`) in Development.
-   - If the record types are missing afterwards, create them by hand under **Record Types**. `ListItem`: `name` (String), `isChecked` (Int64), `addedAt`, `checkedAt`, `removedAt`, `modifiedAt` (Date/Time). `HistoryItem`: `name` (String), `useCount` (Int64), `lastUsedAt`, `modifiedAt` (Date/Time).
+4. Run the app from Xcode once, on a simulator or device signed in to iCloud, and add an item. Builds from Xcode use the **Development** environment; TestFlight builds use **Production**. This run creates the `ListItem` and `HistoryItem` record types and the app's two change subscriptions (`ListItem-changes`, `HistoryItem-changes`) in Development. Leave the app after adding the item: that sends the first "items added" notice, which creates the `AddedNotice` record type.
+   - If the record types are missing afterwards, create them by hand under **Record Types**. `ListItem`: `name` (String), `isChecked` (Int64), `addedAt`, `checkedAt`, `removedAt`, `modifiedAt` (Date/Time). `HistoryItem`: `name` (String), `useCount` (Int64), `lastUsedAt`, `modifiedAt` (Date/Time). `AddedNotice`: `message`, `sender` (String).
 5. Open the [CloudKit Console](https://icloud.developer.apple.com), pick the container, and in the **Development** environment:
-   - **Indexes:** for both `ListItem` and `HistoryItem`, add a **QUERYABLE** index on the modification date (the Console calls it `modifiedTimestamp`) and on `recordName`. Without the first, phones can't download changes.
-   - **Security Roles:** edit `_icloud` (signed-in users) and give it **Create**, **Read** and **Write** on both record types. By default only the person who added an item can change it.
+   - **Indexes:** for both `ListItem` and `HistoryItem`, add a **QUERYABLE** index on the modification date (the Console calls it `modifiedTimestamp`) and on `recordName`. Without the first, phones can't download changes. For `AddedNotice`, add a **QUERYABLE** index on `sender`.
+   - **Security Roles:** edit `_icloud` (signed-in users) and give it **Create**, **Read** and **Write** on `ListItem`, `HistoryItem` and `AddedNotice`. By default only the person who added an item can change it.
    - **Subscriptions:** check that `ListItem-changes` and `HistoryItem-changes` are listed (public database). If not, repeat step 4.
 6. Before the first TestFlight build, use **Deploy Schema Changes** to copy the schema to **Production**, then check that the indexes and security role arrived there.
    - Deploy only after the subscriptions exist in Development, even though the deploy window doesn't list them. Otherwise Production refuses the app's subscriptions with *CloudKit error 12: attempting to create a subscription in a production container*, and the app shows "Live updates are off" (the list still syncs every 20 seconds). This is a reported CloudKit bug; deploying again after step 4 fixed it.
@@ -75,6 +75,7 @@ Every phone needs to be signed in to iCloud to send changes. Without it, the app
 - If two phones change the same item, the most recent change wins.
 - Deleting or clearing an item marks it removed instead of erasing it, so every phone hides it. Adding the name again brings it back.
 - History (suggestions) is shared too.
+- When someone adds items, the other phones get one notification for the whole batch, for example "Added Milk, Eggs, Bread and 17 more". The batch is sent when no item has been added for 2 minutes, or as soon as the person leaves the app. Items deleted or checked off before then are left out, and a phone is never notified about its own items. Each phone asks for notification permission on first launch.
 - When a phone first runs this version, its existing list and history are uploaded and merged into the shared list.
 - Everyone with the app shares one list. That is right for a TestFlight household, but the app needs a different design before any App Store release.
 

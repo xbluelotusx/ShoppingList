@@ -21,7 +21,11 @@ struct ContentView: View {
     }
 
     private var store: ListStore {
-        ListStore(context: modelContext, didChange: { [sync] in sync?.sync() })
+        ListStore(
+            context: modelContext,
+            didChange: { [sync] in sync?.sync() },
+            didAdd: { [sync] name in sync?.noteAdded(name) }
+        )
     }
     private var activeItems: [ListItem] { ListRules.activeSorted(items) }
     private var checkedItems: [ListItem] { ListRules.checkedSorted(items) }
@@ -135,7 +139,7 @@ struct ContentView: View {
         case .failed(let problem):
             notice(problem.message)
         default:
-            if let problem = sync?.liveUpdatesProblem {
+            if let problem = sync?.liveUpdatesProblem ?? sync?.addedNoticeProblem {
                 notice(problem.message)
             }
         }

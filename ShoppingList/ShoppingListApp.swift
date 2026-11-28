@@ -1,6 +1,7 @@
 import SwiftData
 import SwiftUI
 import UIKit
+import UserNotifications
 
 @main
 struct ShoppingListApp: App {
@@ -41,20 +42,34 @@ struct ShoppingListApp: App {
         .onChange(of: scenePhase) { _, phase in
             sync.setActive(phase == .active)
             if phase == .background {
-                sync.sync()
+                sync.leaveApp()
             }
         }
     }
 }
 
-/// Receives the silent pushes iCloud sends when another phone changes the list.
-final class AppDelegate: NSObject, UIApplicationDelegate {
+/// Receives the silent pushes iCloud sends when another phone changes the list,
+/// and shows the "items added" notification while the app is open.
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         application.registerForRemoteNotifications()
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        // Unit tests run inside the app; keep the permission prompt out of them.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
         return true
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
     }
 
     // Nonisolated so the push payload (not Sendable) never crosses onto the
