@@ -125,15 +125,19 @@ struct ContentView: View {
     }
 
     /// Only shown when sharing is not working, so the normal screen stays clean.
+    /// Problems name the failed step and the exact error, and can be selected
+    /// and copied, so whoever sees one can pass it on as is.
     @ViewBuilder
     private var syncNotice: some View {
         switch sync?.status {
         case .noAccount:
             notice("Sign in to iCloud in Settings to share changes with your household.")
-        case .failed:
-            notice("Can't reach iCloud right now. Changes are saved and will sync later.")
+        case .failed(let problem):
+            notice(problem.message)
         default:
-            EmptyView()
+            if let problem = sync?.liveUpdatesProblem {
+                notice(problem.message)
+            }
         }
     }
 
@@ -141,6 +145,7 @@ struct ContentView: View {
         Text(text)
             .font(.footnote)
             .foregroundStyle(.secondary)
+            .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.bottom, 8)

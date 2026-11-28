@@ -35,6 +35,89 @@ enum SyncRules {
     static let pollInterval: Duration = .seconds(20)
 }
 
+/// One thing that went wrong while syncing, worded so the person can act on it
+/// and detailed enough (step, CloudKit code, server text) to diagnose it.
+struct SyncProblem: Equatable {
+    enum Step: Equatable {
+        case download
+        case account
+        case upload
+        /// The change alerts that let other phones' edits arrive right away.
+        case liveUpdates
+    }
+
+    let step: Step
+    /// The CloudKit error code, or nil when the error did not come from CloudKit.
+    let code: Int?
+    /// The error's own description, usually including the server's reason.
+    let detail: String
+
+    init(step: Step, error: Error) {
+        self.step = step
+        // A batch reports one error per record; the first one says what is wrong.
+        var error = error
+        if let ckError = error as? CKError,
+           ckError.code == .partialFailure,
+           let first = ckError.partialErrorsByItemID?.values.first {
+            error = first
+        }
+        if let ckError = error as? CKError {
+            code = ckError.code.rawValue
+        } else {
+            code = nil
+        }
+        detail = error.localizedDescription
+    }
+
+    /// What failed, why, and what to do, followed by the exact error.
+    var message: String {
+        var text = "\(summary) \(advice)"
+        if let code {
+            text += " (CloudKit error \(code): \(detail))"
+        } else {
+            text += " (\(detail))"
+        }
+        return text
+    }
+
+    private var summary: String {
+        switch step {
+        case .download: "Can't download the shared list."
+        case .account: "Can't check your iCloud account."
+        case .upload: "Can't upload your changes. They are saved on this phone."
+        case .liveUpdates: "Live updates are off, so other phones' changes appear within 20 seconds instead of instantly."
+        }
+    }
+
+    private var advice: String {
+        guard let code, let ckCode = CKError.Code(rawValue: code) else {
+            return "It will retry automatically."
+        }
+        switch ckCode {
+        case .networkUnavailable, .networkFailure:
+            return "No internet connection. It will retry when you're back online."
+        case .notAuthenticated:
+            return "Sign in to iCloud in Settings, at the top under your name."
+        case .permissionFailure:
+            return "iCloud refused permission. In CloudKit Console (Production), the _icloud security role needs Create, Read and Write on ListItem and HistoryItem."
+        case .quotaExceeded:
+            return "The app's shared iCloud storage is full. This is the app's storage, not yours."
+        case .requestRateLimited, .serviceUnavailable, .zoneBusy:
+            return "iCloud is busy. It will retry automatically."
+        case .unknownItem:
+            return "A record type is missing. Check Record Types in CloudKit Console (Production)."
+        case .invalidArguments, .serverRejectedRequest:
+            return "iCloud rejected the request, usually because a record type, field or index is missing in CloudKit Console (Production)."
+        case .badContainer, .missingEntitlement:
+            return "This build isn't set up for the app's iCloud container."
+        case .incompatibleVersion:
+            return "Update the app from TestFlight."
+        default:
+            return "It will retry automatically."
+        }
+    }
+}
+
 /// Keeps the local SwiftData store in step with the app's public iCloud database,
 /// which every copy of the app (the household, via TestFlight) shares.
 ///
@@ -49,13 +132,17 @@ final class SyncEngine {
         case syncing
         /// Not signed in to iCloud: the list is read but changes are not sent.
         case noAccount
-        case failed
+        /// The list is not syncing; the problem says which step failed and why.
+        case failed(SyncProblem)
     }
 
     /// Set by the app so the push notification handler can reach it.
     static weak var shared: SyncEngine?
 
     private(set) var status: Status = .idle
+    /// Change alerts could not be set up. The list still syncs by polling, so
+    /// this is reported apart from `status`.
+    private(set) var liveUpdatesProblem: SyncProblem?
 
     @ObservationIgnored private let context: ModelContext
     @ObservationIgnored private var container: CKContainer?
@@ -135,19 +222,33 @@ final class SyncEngine {
     private func pass() async {
         guard let container else { return }
         let database = container.publicCloudDatabase
+        var step = SyncProblem.Step.download
         do {
             try await download(from: database)
+            step = .account
             let account = try await container.accountStatus()
             guard account == .available else {
                 status = .noAccount
                 return
             }
+            step = .upload
             try await upload(to: database)
-            try await subscribeIfNeeded(database)
             status = .idle
         } catch {
-            log.error("Sync failed: \(error.localizedDescription, privacy: .public)")
-            status = .failed
+            let problem = SyncProblem(step: step, error: error)
+            log.error("Sync failed: \(problem.message, privacy: .public)")
+            status = .failed(problem)
+            return
+        }
+
+        // Kept apart: without change alerts the list still syncs by polling.
+        do {
+            try await subscribeIfNeeded(database)
+            liveUpdatesProblem = nil
+        } catch {
+            let problem = SyncProblem(step: .liveUpdates, error: error)
+            log.error("Live updates failed: \(problem.message, privacy: .public)")
+            liveUpdatesProblem = problem
         }
     }
 
@@ -281,6 +382,9 @@ final class SyncEngine {
             records.append(record)
         }
 
+        // A record iCloud refuses stays marked for upload and is retried; the
+        // first such error is reported so the refusal is not silent.
+        var firstRecordError: Error?
         for start in stride(from: 0, to: records.count, by: 200) {
             let batch = Array(records[start..<min(start + 200, records.count)])
             // `.changedKeys` overwrites without a conflict check: the download
@@ -292,7 +396,10 @@ final class SyncEngine {
                 atomically: false
             )
             for (recordID, result) in results {
-                guard case .success = result else { continue }
+                if case .failure(let error) = result {
+                    firstRecordError = firstRecordError ?? error
+                    continue
+                }
                 let name = recordID.recordName
                 if let sent = sentItems[name], sent.0.modifiedAt == sent.1 {
                     sent.0.needsUpload = false
@@ -303,6 +410,9 @@ final class SyncEngine {
             }
         }
         try context.save()
+        if let firstRecordError {
+            throw firstRecordError
+        }
     }
 
     private func itemRecord(for item: ListItem) -> CKRecord {
